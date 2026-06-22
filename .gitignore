@@ -1,0 +1,10 @@
+node_modules/
+dist/
+*.log
+.DS_Store
+.mrcx/
+
+# local smoke-test workspace
+test2/
+mvp-scope.md
+open-questions.md

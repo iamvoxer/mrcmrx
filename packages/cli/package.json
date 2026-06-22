@@ -1,0 +1,18 @@
+{
+  "name": "@mrcx/cli",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "mrcx": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test dist/parse-args.test.js dist/ux-hints.test.js"
+  },
+  "dependencies": {
+    "@mrcx/core": "0.2.0",
+    "@mrcx/server": "0.2.0",
+    "commander": "^13.1.0"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "name": "@mrcx/core",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./markdown": {
+      "types": "./dist/markdown.d.ts",
+      "import": "./dist/markdown.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test dist/store.test.js dist/agent-run.test.js dist/config/settings.test.js dist/agents/codex-client.test.js dist/agents/codex-bin.test.js dist/agents/cursor-bin.test.js dist/agents/run-detail.test.js dist/room-dirs.test.js dist/tools/rg-bin.test.js dist/markdown.test.js"
+  }
+}
