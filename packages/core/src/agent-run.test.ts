@@ -3,6 +3,19 @@ import assert from 'node:assert/strict';
 import { assertAgentRunOk, formatAgentRunFailure } from './agents/agent-run.js';
 import { MrcxError } from './services/context.js';
 
+test('assertAgentRunOk rejects empty Codex body even when displayText exists', () => {
+  assert.throws(
+    () =>
+      assertAgentRunOk('Codex (X)', {
+        text: '',
+        displayText: 'Reconnecting... 2/5',
+        exitCode: 0,
+        stderr: '',
+      }),
+    /no reply body/,
+  );
+});
+
 test('assertAgentRunOk rejects failed runs', () => {
   assert.throws(
     () => assertAgentRunOk('Codex', { text: 'hi', exitCode: 1, stderr: 'boom' }),

@@ -20,27 +20,42 @@ interface CodexJsonEvent {
   type?: string;
   thread_id?: string;
   message?: string;
-  item?: { type?: string; text?: string };
+  item?: { type?: string; text?: string; command?: string };
 }
 
-function parseJsonl(text: string): CodexJsonEvent[] {
-  const events: CodexJsonEvent[] = [];
-  for (const line of text.split(/\r?\n/)) {
-    if (!line.trim()) continue;
-    try {
-      events.push(JSON.parse(line) as CodexJsonEvent);
-    } catch {
-      /* ignore */
-    }
+function shortenCommand(command: string): string {
+  const m =
+    command.match(/-Command\s+'([^']+)'/i) ?? command.match(/-Command\s+"([^"]+)"/i);
+  const inner = (m?.[1] ?? command).trim();
+  if (inner.length <= 100) return inner;
+  return `${inner.slice(0, 97)}...`;
+}
+
+function eventToDisplayPart(e: CodexJsonEvent): string | null {
+  if (e.type === 'error' && e.message?.trim()) {
+    return e.message.trim();
   }
-  return events;
+  if (e.type === 'item.started' && e.item?.type === 'command_execution' && e.item.command) {
+    return `▶ ${shortenCommand(e.item.command)}`;
+  }
+  if (e.type === 'item.completed' && e.item?.type === 'agent_message') {
+    const text = e.item.text?.trim();
+    return text || null;
+  }
+  return null;
 }
 
-function extractThreadId(events: CodexJsonEvent[]): string | undefined {
-  return events.find((e) => e.type === 'thread.started')?.thread_id;
+/** Full Codex stream for UI: errors, command activity, and agent_message body. */
+export function extractCodexDisplayText(events: CodexJsonEvent[]): string {
+  const parts: string[] = [];
+  for (const e of events) {
+    const part = eventToDisplayPart(e);
+    if (part) parts.push(part);
+  }
+  return parts.join('\n\n');
 }
 
-/** Extract chat body from Codex JSONL (agent_message only, excludes type:error). */
+/** Body text for forwarding to C (agent_message only). */
 export function extractCodexChatText(events: CodexJsonEvent[]): string {
   const parts: string[] = [];
   for (const e of events) {
@@ -51,9 +66,6 @@ export function extractCodexChatText(events: CodexJsonEvent[]): string {
   }
   return parts.join('\n\n');
 }
-
-/** @deprecated Use extractCodexChatText; alias kept for external references. */
-export const extractCodexDisplayText = extractCodexChatText;
 
 /** Incrementally parse Codex stdout JSONL; update display text on each complete line. */
 export class CodexJsonlStreamParser {
@@ -75,8 +87,25 @@ export class CodexJsonlStreamParser {
       }
       nl = this.buffer.indexOf('\n');
     }
-    return extractCodexChatText(this.events);
+    return extractCodexDisplayText(this.events);
   }
+}
+
+function parseJsonl(text: string): CodexJsonEvent[] {
+  const events: CodexJsonEvent[] = [];
+  for (const line of text.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    try {
+      events.push(JSON.parse(line) as CodexJsonEvent);
+    } catch {
+      /* ignore */
+    }
+  }
+  return events;
+}
+
+function extractThreadId(events: CodexJsonEvent[]): string | undefined {
+  return events.find((e) => e.type === 'thread.started')?.thread_id;
 }
 
 function splitCsv(raw: string | undefined): string[] {
@@ -244,10 +273,12 @@ function runCodexSpawn(
     child.on('close', (code) => {
       clearTimeout(timer);
       const events = parseJsonl(stdout);
-      const text = extractCodexChatText(events) || stdout.trim();
+      const text = extractCodexChatText(events);
+      const displayText = extractCodexDisplayText(events) || stdout.trim() || text;
       const endedAt = new Date().toISOString();
       resolve({
         text,
+        displayText,
         exitCode: code,
         stderr,
         sessionId: extractThreadId(events),

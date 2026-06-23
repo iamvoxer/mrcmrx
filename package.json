@@ -8,7 +8,7 @@
   ],
   "scripts": {
     "build": "npm run build -w @mrcx/core && npm run build -w @mrcx/server && npm run build -w @mrcx/web && npm run build -w @mrcx/cli",
-    "test": "npm run test -w @mrcx/core && npm run test -w @mrcx/cli",
+    "test": "npm run test -w @mrcx/core && npm run test -w @mrcx/server && npm run test -w @mrcx/cli",
     "mrcx": "node packages/cli/dist/index.js"
   },
   "engines": {

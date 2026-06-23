@@ -6,6 +6,8 @@ import type { AgentRunDetail, Message, Room, Stage } from './types.js';
 type DialogScope = 'room' | 'stage' | 'config' | 'edit-stage' | 'room-settings';
 
 const X_WAITING_TEXT = 'Mr. X is thinking. Large projects may take a while — please wait...';
+const X_REVIEW_C_WAITING_TEXT =
+  "Mr. X is reviewing Mr. C's result. Large projects may take a while — please wait...";
 
 interface AppState {
   rooms: Room[];
@@ -98,7 +100,7 @@ function formatMessageTime(iso: string): string {
 
 function isErrorSystemMessage(m: Message): boolean {
   if (m.speaker !== 'system') return false;
-  return /timeout|failed|no valid|not logged in|error|fail/i.test(m.content);
+  return /timeout|failed|no valid|not logged in|error|fail|chatgpt\.com|cannot reach/i.test(m.content);
 }
 
 function messageClass(m: Message): string {
@@ -161,8 +163,10 @@ async function showMessageRunDetail(messageId: string): Promise<void> {
 }
 
 const ARTIFACT_PREVIEW_LIMIT = 4000;
+let previewArtifactRelPath: string | null = null;
 
 function openArtifactModal(filePath: string, content: string): void {
+  previewArtifactRelPath = filePath;
   const dialog = document.querySelector('#artifact-dialog') as HTMLDialogElement;
   const title = document.querySelector('#artifact-dialog-title')!;
   const body = document.querySelector('#artifact-dialog-body')!;
@@ -345,17 +349,23 @@ function tempStreamMessage(
   };
 }
 
+function messageDisplayText(m: Message): string {
+  return (m.displayContent ?? m.content).trim();
+}
+
 function messageBodyHtml(m: Message): string {
-  if (m.meta?.streaming && m.speaker === 'x') {
-    return `<p class="message-waiting">${esc(X_WAITING_TEXT)}</p>`;
+  const display = messageDisplayText(m);
+  if (m.meta?.streaming && m.speaker === 'x' && !display) {
+    const waiting = m.meta.streamMode === 'review-c' ? X_REVIEW_C_WAITING_TEXT : X_WAITING_TEXT;
+    return `<p class="message-waiting">${esc(waiting)}</p>`;
   }
-  if (!m.content.trim()) {
+  if (!display) {
     return '<span class="note">…</span>';
   }
   if (m.speaker === 'x' || m.speaker === 'c') {
-    return `<div class="message-body md-body">${renderChatMarkdown(m.content)}</div>`;
+    return `<div class="message-body md-body">${renderChatMarkdown(display)}</div>`;
   }
-  return `<p>${esc(m.content).replace(/\n/g, '<br/>')}</p>`;
+  return `<p>${esc(display).replace(/\n/g, '<br/>')}</p>`;
 }
 
 function renderMessages(): string {
@@ -639,7 +649,10 @@ function mount(): void {
       <div class="artifact-dialog-card">
         <header class="artifact-dialog-header">
           <h2 id="artifact-dialog-title">File</h2>
-          <button type="button" class="ghost-button" id="artifact-close">Close</button>
+          <div class="artifact-dialog-actions">
+            <button type="button" class="ghost-button" id="artifact-open-editor">Open in Editor</button>
+            <button type="button" class="ghost-button" id="artifact-close">Close</button>
+          </div>
         </header>
         <pre class="artifact-dialog-body" id="artifact-dialog-body"></pre>
         <footer class="artifact-dialog-footer">
@@ -710,10 +723,10 @@ function syncChat(): void {
 
 function syncComposer(): void {
   const ta = document.querySelector('#composer-input') as HTMLTextAreaElement | null;
-  const enabled = !!(state.activeRoom && state.activeStage && !state.loading);
-  if (ta) ta.disabled = !enabled;
+  const hasStage = !!(state.activeRoom && state.activeStage);
+  if (ta) ta.disabled = !hasStage;
   document.querySelectorAll('[data-action]').forEach((btn) => {
-    (btn as HTMLButtonElement).disabled = !enabled;
+    (btn as HTMLButtonElement).disabled = !hasStage || state.loading;
   });
 }
 
@@ -752,6 +765,24 @@ async function reloadMessages(): Promise<void> {
   const { messages } = await api.listMessages(state.activeStage.id);
   state.messages = messages;
   syncChat();
+}
+
+/** After Codex stream ends, replace temp bubbles with persisted messages (incl. runId / Details). */
+async function reloadStageAfterCodexStream(stageId: string, roomId: string): Promise<void> {
+  try {
+    const { messages } = await api.listMessages(stageId);
+    state.messages = messages;
+    syncChat();
+  } catch {
+    /* ignore */
+  }
+  try {
+    const { artifacts } = await api.listArtifacts(roomId);
+    state.artifacts = artifacts;
+    syncRightPanel();
+  } catch {
+    /* ignore */
+  }
 }
 
 async function openRoomDialog(): Promise<void> {
@@ -970,6 +1001,15 @@ function bindEventsOnce(): void {
       (document.querySelector('#artifact-dialog') as HTMLDialogElement).close();
       return;
     }
+    if (target.closest('#artifact-open-editor')) {
+      if (!state.activeRoom || !previewArtifactRelPath) return;
+      try {
+        await api.openArtifact(state.activeRoom.projectPath, previewArtifactRelPath);
+      } catch (err) {
+        setChatNotice(err instanceof Error ? err.message : String(err), true);
+      }
+      return;
+    }
     if (target.closest('#run-detail-close')) {
       (document.querySelector('#run-detail-dialog') as HTMLDialogElement).close();
       return;
@@ -1039,13 +1079,11 @@ function bindEventsOnce(): void {
       const composer = document.querySelector('#composer-input') as HTMLTextAreaElement;
       const text = composer.value.trim();
       const activityHint =
-        action === 'talk-x'
-          ? 'Discussing with Mr. X; this may take 1–3 minutes…'
-          : action === 'x-to-c'
-            ? 'Sending Mr. X\'s conclusion to Mr. C; this may take several minutes…'
-            : 'Sending Mr. C\'s result to Mr. X for review; this may take 1–3 minutes…';
+        action === 'x-to-c'
+          ? 'Sending Mr. X\'s conclusion to Mr. C; this may take several minutes…'
+          : '';
       setLoading(true);
-      if (action !== 'talk-x') {
+      if (action !== 'talk-x' && action !== 'c-to-x') {
         setChatNotice(activityHint);
       }
       try {
@@ -1064,41 +1102,64 @@ function bindEventsOnce(): void {
           composer.value = '';
           syncChat();
           scrollChat();
-          await api.chatXStream(text, projectPath, {
-            onDelta: (t) => {
-              if (t.trim()) {
-                if (xMsg.meta) delete xMsg.meta.streaming;
-                xMsg.content = t;
-              }
-              syncChat();
-              scrollChat();
-            },
-            onDone: async () => {
-              const { messages } = await api.listMessages(stageId);
-              state.messages = messages;
-              syncChat();
-            },
-            onError: async (err) => {
-              setChatNotice(err, true);
-              try {
-                const { messages } = await api.listMessages(stageId);
-                state.messages = messages;
-              } catch {
-                /* ignore */
-              }
-              syncChat();
-            },
-          });
-          const { artifacts } = await api.listArtifacts(state.activeRoom.id);
-          state.artifacts = artifacts;
-          syncRightPanel();
+          try {
+            await api.chatXStream(text, projectPath, {
+              onDelta: (t) => {
+                if (t.trim()) {
+                  if (xMsg.meta) delete xMsg.meta.streaming;
+                  xMsg.displayContent = t;
+                }
+                syncChat();
+                scrollChat();
+              },
+              onDone: async () => {},
+              onError: async (err) => {
+                setChatNotice(err, true);
+                composer.value = text;
+              },
+            });
+          } catch (err) {
+            setChatNotice(err instanceof Error ? err.message : String(err), true);
+            composer.value = text;
+          } finally {
+            await reloadStageAfterCodexStream(stageId, state.activeRoom.id);
+          }
           return;
         } else if (action === 'x-to-c') {
           await api.forwardXToC({ note: text || undefined, projectPath });
           composer.value = '';
         } else if (action === 'c-to-x') {
-          await api.forwardCToX({ note: text || undefined, projectPath, includeDiff: true });
+          const roomId = state.activeRoom.id;
+          const stageId = state.activeStage.id;
+          const xMsg = tempStreamMessage('x', '', roomId, stageId);
+          xMsg.meta = { streaming: true, provider: 'codex', streamMode: 'review-c' };
+          state.messages.push(xMsg);
           composer.value = '';
+          syncChat();
+          scrollChat();
+          try {
+            await api.forwardCToXStream({ note: text || undefined, projectPath, includeDiff: true }, {
+              onDelta: (t) => {
+                if (t.trim()) {
+                  if (xMsg.meta) delete xMsg.meta.streaming;
+                  xMsg.displayContent = t;
+                }
+                syncChat();
+                scrollChat();
+              },
+              onDone: async () => {},
+              onError: async (err) => {
+                setChatNotice(err, true);
+                composer.value = text;
+              },
+            });
+          } catch (err) {
+            setChatNotice(err instanceof Error ? err.message : String(err), true);
+            composer.value = text;
+          } finally {
+            await reloadStageAfterCodexStream(stageId, state.activeRoom.id);
+          }
+          return;
         }
         const { messages } = await api.listMessages(state.activeStage.id);
         state.messages = messages;

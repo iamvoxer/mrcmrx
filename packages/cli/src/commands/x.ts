@@ -25,7 +25,7 @@ export function registerXCommand(program: Command): void {
           allowWrite: opts.allowXWrite,
         });
         console.log('\n--- X ---\n');
-        console.log(reply.content);
+        console.log(reply.displayContent ?? reply.content);
       } catch (e) {
         handleError(e);
       }

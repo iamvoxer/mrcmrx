@@ -1,5 +1,7 @@
 import path from 'node:path';
-import { codexSendMessage } from '../agents/codex-client.js';
+import * as codexClient from '../agents/codex-client.js';
+import type { CodexCallOptions } from '../agents/codex-client.js';
+import { checkChatGptConnectivity } from '../agents/chatgpt-connectivity.js';
 import { cursorSendMessage } from '../agents/cursor-client.js';
 import { assertAgentRunOk, formatAgentRunFailure } from '../agents/agent-run.js';
 import {
@@ -13,6 +15,11 @@ import { getActiveContext, gitDiffStat, MrcxError } from './context.js';
 
 function lastMessages(messages: Message[], speaker: Message['speaker'], count: number): Message[] {
   return messages.filter((m) => m.speaker === speaker).slice(-count);
+}
+
+/** Body-only block sent to C when forwarding X messages (never uses displayContent). */
+export function xForwardBlock(xMsgs: Message[]): string {
+  return xMsgs.map((m) => m.content).join('\n\n---\n\n');
 }
 
 function recordAgentFailure(
@@ -30,20 +37,71 @@ function recordAgentFailure(
   throw new MrcxError(text);
 }
 
+function recordConnectivityFailure(
+  root: string,
+  roomId: string,
+  stageId: string,
+  err: unknown,
+): never {
+  if (err instanceof MrcxError) {
+    appendMessage(root, createMessageRecord(roomId, stageId, 'system', err.message));
+    throw err;
+  }
+  const text = err instanceof Error ? err.message : String(err);
+  appendMessage(root, createMessageRecord(roomId, stageId, 'system', text));
+  throw new MrcxError(text);
+}
+
+async function ensureChatGptConnectivity(
+  projectPath: string,
+  root: string,
+  roomId: string,
+  stageId: string,
+  check: (path: string) => Promise<void> = checkChatGptConnectivity,
+): Promise<void> {
+  try {
+    await check(projectPath);
+  } catch (err) {
+    recordConnectivityFailure(root, roomId, stageId, err);
+  }
+}
+
 export async function chatWithX(
   userMessage: string,
-  options: { projectPath?: string; allowWrite?: boolean; onProgress?: (text: string) => void } = {},
+  options: {
+    projectPath?: string;
+    allowWrite?: boolean;
+    onProgress?: (text: string) => void;
+    /** @internal Test hook to stub connectivity check. */
+    connectivityCheck?: (projectPath: string) => Promise<void>;
+    /** @internal Test hook to stub Codex without spawning a process. */
+    codexSend?: (
+      projectPath: string,
+      sessionId: string,
+      prompt: string,
+      callOptions: CodexCallOptions,
+    ) => ReturnType<typeof codexClient.codexSendMessage>;
+  } = {},
 ): Promise<Message> {
   const { projectPath: root, room, stage } = getActiveContext(options.projectPath);
   if (!stage.xSession?.sessionId) {
     throw new MrcxError('Current stage has no Codex session');
   }
 
+  await ensureChatGptConnectivity(
+    room.projectPath,
+    root,
+    room.id,
+    stage.id,
+    options.connectivityCheck,
+  );
+
   const extraDirs = room.extraReadableDirs ?? [];
 
   appendMessage(root, createMessageRecord(room.id, stage.id, 'user', userMessage));
 
-  const run = await codexSendMessage(room.projectPath, stage.xSession.sessionId, userMessage, {
+  const sendCodex = options.codexSend ?? codexClient.codexSendMessage;
+  const run = await sendCodex(room.projectPath, stage.xSession.sessionId, userMessage, {
     allowWrite: options.allowWrite,
     extraReadableDirs: extraDirs,
     onProgress: options.onProgress,
@@ -77,7 +135,7 @@ export async function forwardXToC(options: {
     throw new MrcxError('No X messages to forward');
   }
 
-  const xBlock = xMsgs.map((m) => m.content).join('\n\n---\n\n');
+  const xBlock = xForwardBlock(xMsgs);
   const prompt = [
     '[Conclusion from X — execute this and modify workspace files]',
     xBlock,
@@ -120,6 +178,16 @@ export async function forwardCToX(options: {
   includeDiff?: boolean;
   allowWrite?: boolean;
   projectPath?: string;
+  onProgress?: (text: string) => void;
+  /** @internal Test hook to stub Codex without spawning a process. */
+  codexSend?: (
+    projectPath: string,
+    sessionId: string,
+    prompt: string,
+    callOptions: CodexCallOptions,
+  ) => ReturnType<typeof codexClient.codexSendMessage>;
+  /** @internal Test hook to stub connectivity check. */
+  connectivityCheck?: (projectPath: string) => Promise<void>;
 }): Promise<Message> {
   const { projectPath: root, room, stage } = getActiveContext(options.projectPath);
   if (!stage.xSession?.sessionId) {
@@ -131,6 +199,14 @@ export async function forwardCToX(options: {
   if (cMsgs.length === 0) {
     throw new MrcxError('No C messages to forward');
   }
+
+  await ensureChatGptConnectivity(
+    room.projectPath,
+    root,
+    room.id,
+    stage.id,
+    options.connectivityCheck,
+  );
 
   const cBlock = cMsgs.map((m) => m.content).join('\n\n---\n\n');
   const diff = options.includeDiff ? gitDiffStat(room.projectPath) : null;
@@ -149,9 +225,11 @@ export async function forwardCToX(options: {
     createMessageRecord(room.id, stage.id, 'user', `[Forwarded to X]\n${prompt}`),
   );
 
-  const run = await codexSendMessage(room.projectPath, stage.xSession.sessionId, prompt, {
+  const sendCodex = options.codexSend ?? codexClient.codexSendMessage;
+  const run = await sendCodex(room.projectPath, stage.xSession.sessionId, prompt, {
     allowWrite: options.allowWrite,
     extraReadableDirs: room.extraReadableDirs ?? [],
+    onProgress: options.onProgress,
   });
 
   try {

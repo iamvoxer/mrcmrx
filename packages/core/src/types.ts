@@ -47,7 +47,10 @@ export interface Message {
   roomId: string;
   stageId: string;
   speaker: MessageSpeaker;
+  /** Body text (e.g. agent_message only); used when forwarding to C. */
   content: string;
+  /** Full text for UI, including status/errors; defaults to content when absent. */
+  displayContent?: string;
   createdAt: string;
   meta?: MessageMeta;
 }
@@ -58,7 +61,10 @@ export interface MrcxContext {
 }
 
 export interface AgentRunResult {
+  /** Body text (agent_message only for Codex). */
   text: string;
+  /** Full display text for UI (includes errors/status for Codex). */
+  displayText?: string;
   exitCode: number | null;
   stderr: string;
   sessionId?: string;

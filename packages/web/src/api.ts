@@ -1,5 +1,67 @@
 import type { Message, Room, Stage, AgentRunDetail } from './types.js';
 
+type NdjsonStreamHandlers = {
+  onDelta: (text: string) => void;
+  onDone: (message: Message) => void | Promise<void>;
+  onError: (error: string) => void | Promise<void>;
+};
+
+async function consumeNdjsonStream(res: Response, handlers: NdjsonStreamHandlers): Promise<void> {
+  if (!res.body) throw new Error('Response has no body');
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+
+  const handleLine = async (line: string): Promise<void> => {
+    if (!line) return;
+    const evt = JSON.parse(line) as {
+      type: string;
+      text?: string;
+      message?: Message;
+      error?: string;
+    };
+    if (evt.type === 'delta' && evt.text != null) handlers.onDelta(evt.text);
+    else if (evt.type === 'done' && evt.message) await handlers.onDone(evt.message);
+    else if (evt.type === 'error') await handlers.onError(evt.error ?? 'Unknown error');
+  };
+
+  const drainBuf = async (): Promise<void> => {
+    let nl = buf.indexOf('\n');
+    while (nl >= 0) {
+      const line = buf.slice(0, nl).trim();
+      buf = buf.slice(nl + 1);
+      await handleLine(line);
+      nl = buf.indexOf('\n');
+    }
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (value) {
+      buf += decoder.decode(value, { stream: true });
+      await drainBuf();
+    }
+    if (done) {
+      const tail = buf.trim();
+      if (tail) await handleLine(tail);
+      break;
+    }
+  }
+}
+
+async function postNdjsonStream(path: string, body: unknown, handlers: NdjsonStreamHandlers): Promise<void> {
+  const res = await fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const data = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(data.error ?? `HTTP ${res.status}`);
+  }
+  await consumeNdjsonStream(res, handlers);
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     ...init,
@@ -50,52 +112,20 @@ export const api = {
   chatXStream: async (
     message: string,
     projectPath: string,
-    handlers: {
-      onDelta: (text: string) => void;
-      onDone: (message: Message) => void;
-      onError: (error: string) => void;
-    },
+    handlers: NdjsonStreamHandlers,
   ): Promise<void> => {
-    const res = await fetch('/api/x/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message, projectPath, stream: true }),
-    });
-    if (!res.ok) {
-      const data = (await res.json().catch(() => ({}))) as { error?: string };
-      throw new Error(data.error ?? `HTTP ${res.status}`);
-    }
-    if (!res.body) throw new Error('Response has no body');
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buf = '';
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      let nl = buf.indexOf('\n');
-      while (nl >= 0) {
-        const line = buf.slice(0, nl).trim();
-        buf = buf.slice(nl + 1);
-        if (line) {
-          const evt = JSON.parse(line) as {
-            type: string;
-            text?: string;
-            message?: Message;
-            error?: string;
-          };
-          if (evt.type === 'delta' && evt.text != null) handlers.onDelta(evt.text);
-          else if (evt.type === 'done' && evt.message) handlers.onDone(evt.message);
-          else if (evt.type === 'error') handlers.onError(evt.error ?? 'Unknown error');
-        }
-        nl = buf.indexOf('\n');
-      }
-    }
+    await postNdjsonStream('/api/x/chat', { message, projectPath, stream: true }, handlers);
   },
   forwardXToC: (body: { note?: string; projectPath: string; last?: number }) =>
     request<{ message: Message }>('/api/forward/x-to-c', { method: 'POST', body: JSON.stringify(body) }),
   forwardCToX: (body: { note?: string; projectPath: string; last?: number; includeDiff?: boolean }) =>
     request<{ message: Message }>('/api/forward/c-to-x', { method: 'POST', body: JSON.stringify(body) }),
+  forwardCToXStream: async (
+    body: { note?: string; projectPath: string; last?: number; includeDiff?: boolean },
+    handlers: NdjsonStreamHandlers,
+  ): Promise<void> => {
+    await postNdjsonStream('/api/forward/c-to-x', { ...body, stream: true }, handlers);
+  },
   getConfig: (projectPath: string) =>
     request<{
       proxy: { url?: string } | null;
@@ -155,6 +185,11 @@ export const api = {
     request<{ path: string; content: string }>(
       `/api/artifacts/content?projectPath=${encodeURIComponent(projectPath)}&path=${encodeURIComponent(relPath)}`,
     ),
+  openArtifact: (projectPath: string, relPath: string) =>
+    request<{ ok: boolean; path: string }>('/api/artifacts/open', {
+      method: 'POST',
+      body: JSON.stringify({ projectPath, path: relPath }),
+    }),
   suggestedProjectPath: () => request<{ path: string }>('/api/fs/suggested-path'),
   pickDirectory: (initialPath?: string) =>
     request<{ path?: string; cancelled: boolean }>('/api/fs/pick-directory', {

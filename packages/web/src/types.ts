@@ -29,6 +29,8 @@ export interface MessageMeta {
   runId?: string;
   /** Client-side streaming placeholder while Mr. X is thinking */
   streaming?: boolean;
+  /** Which waiting copy to show before first stream delta */
+  streamMode?: 'talk' | 'review-c';
 }
 
 export interface Message {
@@ -36,7 +38,10 @@ export interface Message {
   roomId: string;
   stageId: string;
   speaker: 'user' | 'x' | 'c' | 'system';
+  /** Body text for forwarding; for X from Codex this is agent_message only. */
   content: string;
+  /** Full stream for UI (errors, command activity, body). */
+  displayContent?: string;
   createdAt: string;
   meta?: MessageMeta;
 }

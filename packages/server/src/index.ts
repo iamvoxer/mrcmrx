@@ -38,9 +38,9 @@ import {
   useRoom,
   useStage,
 } from '@mrcx/core';
-import { listArtifacts, readArtifact } from './artifacts.js';
+import { listArtifacts, readArtifact, resolveArtifactFile } from './artifacts.js';
 import { bootstrapUiProjects } from './discovery.js';
-import { openPathInExplorer } from './open-path.js';
+import { openFileWithDefaultApp, openPathInExplorer } from './open-path.js';
 import { pickDirectory } from './pick-directory.js';
 import { registerProjectPath } from './registry.js';
 import { findRoom, findStage, listAllRooms } from './resolver.js';
@@ -339,7 +339,37 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, pa
     }
 
     if (method === 'POST' && pathname === '/api/forward/c-to-x') {
-      const body = await readJsonBody<{ last?: number; note?: string; includeDiff?: boolean; projectPath?: string }>(req);
+      const body = await readJsonBody<{
+        last?: number;
+        note?: string;
+        includeDiff?: boolean;
+        projectPath?: string;
+        stream?: boolean;
+      }>(req);
+      if (body.stream) {
+        res.writeHead(200, {
+          'Content-Type': 'application/x-ndjson; charset=utf-8',
+          'Cache-Control': 'no-cache',
+          Connection: 'keep-alive',
+        });
+        const writeLine = (obj: unknown): void => {
+          res.write(`${JSON.stringify(obj)}\n`);
+        };
+        try {
+          const msg = await forwardCToX({
+            last: body.last ?? 1,
+            note: body.note,
+            includeDiff: body.includeDiff ?? false,
+            projectPath: body.projectPath,
+            onProgress: (text) => writeLine({ type: 'delta', text }),
+          });
+          writeLine({ type: 'done', message: msg });
+        } catch (err) {
+          writeLine({ type: 'error', error: errorMessage(err) });
+        }
+        res.end();
+        return true;
+      }
       const msg = await forwardCToX({
         last: body.last ?? 1,
         note: body.note,
@@ -564,6 +594,18 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, pa
         return true;
       }
       sendJson(res, 200, { path: relPath, content: readArtifact(projectPath, relPath) });
+      return true;
+    }
+
+    if (method === 'POST' && pathname === '/api/artifacts/open') {
+      const body = await readJsonBody<{ projectPath?: string; path?: string }>(req);
+      if (!body.projectPath?.trim() || !body.path?.trim()) {
+        sendJson(res, 400, { error: 'projectPath and path are required' });
+        return true;
+      }
+      const fullPath = resolveArtifactFile(body.projectPath.trim(), body.path.trim());
+      await openFileWithDefaultApp(fullPath);
+      sendJson(res, 200, { ok: true, path: fullPath });
       return true;
     }
 

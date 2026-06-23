@@ -35,3 +35,25 @@ export async function openPathInExplorer(rawPath: string): Promise<void> {
   }
   await spawnDetached('xdg-open', [resolved]);
 }
+
+/** Open a file with the OS default application (.md → VS Code, .html → browser, etc.). */
+export async function openFileWithDefaultApp(rawPath: string): Promise<void> {
+  const resolved = path.resolve(rawPath.trim());
+  if (!fs.existsSync(resolved)) {
+    throw new Error(`Path does not exist: ${resolved}`);
+  }
+  if (!fs.statSync(resolved).isFile()) {
+    throw new Error(`Not a file: ${resolved}`);
+  }
+
+  if (process.platform === 'win32') {
+    // Empty title argument required when the path contains spaces.
+    await spawnDetached('cmd.exe', ['/c', 'start', '', resolved]);
+    return;
+  }
+  if (process.platform === 'darwin') {
+    await spawnDetached('open', [resolved]);
+    return;
+  }
+  await spawnDetached('xdg-open', [resolved]);
+}

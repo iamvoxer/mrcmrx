@@ -4,6 +4,16 @@ import { resolveProjectPath } from '@mrcx/core';
 
 const SKIP_DIRS = new Set(['.mrcx', '.git', 'node_modules', 'dist']);
 
+/** Reject paths under dirs skipped by listArtifacts (same boundary for read/open). */
+export function assertAllowedArtifactPath(relPath: string): void {
+  const normalized = path.normalize(relPath).replace(/\\/g, '/');
+  for (const seg of normalized.split('/')) {
+    if (seg && SKIP_DIRS.has(seg)) {
+      throw new Error(`Artifact path not allowed: ${relPath}`);
+    }
+  }
+}
+
 export interface ArtifactEntry {
   path: string;
   name: string;
@@ -44,11 +54,22 @@ export function listArtifacts(projectPath: string, maxDepth = 2): ArtifactEntry[
 }
 
 export function readArtifact(projectPath: string, relPath: string): string {
+  return fs.readFileSync(resolveArtifactFile(projectPath, relPath), 'utf8');
+}
+
+export function resolveArtifactFile(projectPath: string, relPath: string): string {
   const root = resolveProjectPath(projectPath);
   const normalized = path.normalize(relPath).replace(/^(\.\.(\/|\\|$))+/, '');
+  assertAllowedArtifactPath(normalized);
   const full = path.resolve(root, normalized);
   if (!full.startsWith(root + path.sep) && full !== root) {
     throw new Error('Path escapes project root');
   }
-  return fs.readFileSync(full, 'utf8');
+  if (!fs.existsSync(full)) {
+    throw new Error('File does not exist');
+  }
+  if (!fs.statSync(full).isFile()) {
+    throw new Error('Not a file');
+  }
+  return full;
 }

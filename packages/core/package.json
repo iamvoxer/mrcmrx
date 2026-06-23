@@ -17,6 +17,6 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "npm run build && node --test dist/store.test.js dist/agent-run.test.js dist/config/settings.test.js dist/agents/codex-client.test.js dist/agents/codex-bin.test.js dist/agents/cursor-bin.test.js dist/agents/run-detail.test.js dist/room-dirs.test.js dist/tools/rg-bin.test.js dist/markdown.test.js"
+    "test": "npm run build && node --test dist/store.test.js dist/agent-run.test.js dist/config/settings.test.js dist/agents/codex-client.test.js dist/agents/codex-bin.test.js dist/agents/cursor-bin.test.js dist/agents/run-detail.test.js dist/agents/chatgpt-connectivity.test.js dist/room-dirs.test.js dist/tools/rg-bin.test.js dist/markdown.test.js dist/services/chat-service.test.js dist/services/chat-service-forward.test.js dist/services/chat-service-connectivity.test.js"
   }
 }

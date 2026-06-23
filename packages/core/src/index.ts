@@ -61,5 +61,6 @@ export {
   resolveCursorAgentInvocation,
 } from './agents/cursor-bin.js';
 export { detectCodexPath, resolveCodexInvocation } from './agents/codex-bin.js';
+export { checkChatGptConnectivity, formatChatGptConnectivityError } from './agents/chatgpt-connectivity.js';
 export { detectRgPath, resolveRgInvocation } from './tools/rg-bin.js';
 export { escapeHtml, renderChatMarkdown } from './markdown.js';
