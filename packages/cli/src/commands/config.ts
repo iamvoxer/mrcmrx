@@ -7,13 +7,12 @@ import {
   detectCodexPath,
   detectCursorAgentPath,
   detectRgPath,
-  findMrcxProjectPath,
-  loadSettings,
+  globalSettingsPath,
+  loadGlobalSettings,
   MrcxError,
   resolveCodexInvocation,
   resolveCursorAgentInvocation,
   resolveRgInvocation,
-  resolveProjectPath,
   setCursorAgentPath,
   setCodexPath,
   setRgPath,
@@ -28,38 +27,29 @@ function handleError(err: unknown): never {
   throw err;
 }
 
-function resolveConfigPath(optsPath: string | undefined, positionalPath: string | undefined): string {
-  const explicit = optsPath ?? positionalPath;
-  if (explicit) {
-    return resolveProjectPath(explicit);
-  }
-  return findMrcxProjectPath();
-}
-
 export function registerConfigCommand(program: Command): void {
-  const config = program.command('config').description('Project-level settings (stored in <project>/.mrcx/settings.json)');
+  const config = program
+    .command('config')
+    .description('User-level tool settings (stored in ~/.mrcx/settings.json)');
 
   const proxy = config.command('proxy').description('HTTP/HTTPS proxy (inherited by Codex and other child processes)');
 
   proxy
     .command('set')
     .description('Set proxy URL, e.g. http://127.0.0.1:7892')
-    .option('-p, --path <dir>', 'Project directory (default: walk up from cwd to find .mrcx)')
     .argument('[url]', 'Proxy URL (positional fallback when npm swallows args)')
-    .action((urlPos: string | undefined, opts: { path?: string }) => {
+    .action((urlPos: string | undefined) => {
       try {
         const url = urlPos?.trim();
         if (!url) {
           throw new MrcxError('Usage: mrcx config proxy set <url>\n  Example: mrcx config proxy set http://127.0.0.1:7892');
         }
-        const projectPath = resolveConfigPath(opts.path, undefined);
-        setProxyUrl(projectPath, url);
+        setProxyUrl(url);
         console.log(`Proxy set: ${url}`);
-        console.log(`  Project: ${projectPath}`);
-        console.log(`  File: ${projectPath}\\.mrcx\\settings.json`);
+        console.log(`  File: ${globalSettingsPath()}`);
         console.log('');
-        console.log('Codex / Cursor child processes will use HTTP_PROXY / HTTPS_PROXY automatically.');
-        console.log('One-off override: mrcx --proxy=<url> ...');
+        console.log('Saved to user settings. Codex / Cursor child processes use this proxy only (shell HTTP_PROXY is ignored).');
+        console.log('One-off override for this run: mrcx --proxy=<url> ...');
       } catch (e) {
         handleError(e);
       }
@@ -68,14 +58,11 @@ export function registerConfigCommand(program: Command): void {
   proxy
     .command('show')
     .description('Show current proxy settings')
-    .option('-p, --path <dir>', 'Project directory')
-    .argument('[path]', 'projectPath (positional)')
-    .action((pathPos: string | undefined, opts: { path?: string }) => {
+    .action(() => {
       try {
-        const projectPath = resolveConfigPath(opts.path, pathPos);
-        const settings = loadSettings(projectPath);
+        const settings = loadGlobalSettings();
         const p = settings.proxy;
-        console.log(`Project: ${projectPath}`);
+        console.log(`File: ${globalSettingsPath()}`);
         if (!p?.url && !p?.http && !p?.https) {
           console.log('(no proxy configured)');
           console.log('');
@@ -93,13 +80,10 @@ export function registerConfigCommand(program: Command): void {
   proxy
     .command('clear')
     .description('Clear proxy settings')
-    .option('-p, --path <dir>', 'Project directory')
-    .argument('[path]', 'projectPath (positional)')
-    .action((pathPos: string | undefined, opts: { path?: string }) => {
+    .action(() => {
       try {
-        const projectPath = resolveConfigPath(opts.path, pathPos);
-        clearProxy(projectPath);
-        console.log(`Proxy cleared: ${projectPath}`);
+        clearProxy();
+        console.log(`Proxy cleared: ${globalSettingsPath()}`);
       } catch (e) {
         handleError(e);
       }
@@ -110,17 +94,15 @@ export function registerConfigCommand(program: Command): void {
   cursor
     .command('set')
     .description('Set Cursor Agent path (node.exe, index.js, or version directory)')
-    .option('-p, --path <dir>', 'Project directory')
     .argument('<agentPath>', 'Full path')
-    .action((agentPath: string, opts: { path?: string }) => {
+    .action((agentPath: string) => {
       try {
-        const projectPath = resolveConfigPath(opts.path, undefined);
-        setCursorAgentPath(projectPath, agentPath);
-        const inv = resolveCursorAgentInvocation(projectPath);
+        setCursorAgentPath(agentPath);
+        const inv = resolveCursorAgentInvocation();
         console.log(`Cursor Agent set: ${agentPath}`);
         console.log(`  Invocation: ${inv.node} ${inv.index}`);
         console.log(`  Source: ${inv.source}`);
-        console.log(`  File: ${projectPath}\\.mrcx\\settings.json`);
+        console.log(`  File: ${globalSettingsPath()}`);
       } catch (e) {
         handleError(e);
       }
@@ -129,13 +111,10 @@ export function registerConfigCommand(program: Command): void {
   cursor
     .command('show')
     .description('Show Cursor Agent settings and resolved path')
-    .option('-p, --path <dir>', 'Project directory')
-    .argument('[path]', 'projectPath (positional)')
-    .action((pathPos: string | undefined, opts: { path?: string }) => {
+    .action(() => {
       try {
-        const projectPath = resolveConfigPath(opts.path, pathPos);
-        const settings = loadSettings(projectPath);
-        console.log(`Project: ${projectPath}`);
+        const settings = loadGlobalSettings();
+        console.log(`File: ${globalSettingsPath()}`);
         if (settings.cursorAgent?.path) {
           console.log(`  Configured path: ${settings.cursorAgent.path}`);
         } else {
@@ -143,7 +122,7 @@ export function registerConfigCommand(program: Command): void {
         }
         const detected = detectCursorAgentPath();
         if (detected) console.log(`  Auto-detected: ${detected}`);
-        const inv = resolveCursorAgentInvocation(projectPath);
+        const inv = resolveCursorAgentInvocation();
         console.log(`  In use: ${inv.node}`);
         console.log(`  index.js: ${inv.index}`);
         console.log(`  Source: ${inv.source}`);
@@ -155,13 +134,10 @@ export function registerConfigCommand(program: Command): void {
   cursor
     .command('clear')
     .description('Clear Cursor Agent path (restore auto-detection)')
-    .option('-p, --path <dir>', 'Project directory')
-    .argument('[path]', 'projectPath (positional)')
-    .action((pathPos: string | undefined, opts: { path?: string }) => {
+    .action(() => {
       try {
-        const projectPath = resolveConfigPath(opts.path, pathPos);
-        clearCursorAgentPath(projectPath);
-        console.log(`Cursor Agent config cleared: ${projectPath}`);
+        clearCursorAgentPath();
+        console.log(`Cursor Agent config cleared: ${globalSettingsPath()}`);
       } catch (e) {
         handleError(e);
       }
@@ -184,17 +160,15 @@ export function registerConfigCommand(program: Command): void {
   codex
     .command('set')
     .description('Set full path to codex.exe')
-    .option('-p, --path <dir>', 'Project directory')
     .argument('<codexPath>', 'Full path to codex.exe')
-    .action((codexPath: string, opts: { path?: string }) => {
+    .action((codexPath: string) => {
       try {
-        const projectPath = resolveConfigPath(opts.path, undefined);
-        setCodexPath(projectPath, codexPath);
-        const inv = resolveCodexInvocation(projectPath);
+        setCodexPath(codexPath);
+        const inv = resolveCodexInvocation();
         console.log(`Codex set: ${codexPath}`);
         console.log(`  Invocation: ${inv.bin}`);
         console.log(`  Source: ${inv.source}`);
-        console.log(`  File: ${projectPath}\\.mrcx\\settings.json`);
+        console.log(`  File: ${globalSettingsPath()}`);
       } catch (e) {
         handleError(e);
       }
@@ -203,13 +177,10 @@ export function registerConfigCommand(program: Command): void {
   codex
     .command('show')
     .description('Show Codex settings and resolved path')
-    .option('-p, --path <dir>', 'Project directory')
-    .argument('[path]', 'projectPath (positional)')
-    .action((pathPos: string | undefined, opts: { path?: string }) => {
+    .action(() => {
       try {
-        const projectPath = resolveConfigPath(opts.path, pathPos);
-        const settings = loadSettings(projectPath);
-        console.log(`Project: ${projectPath}`);
+        const settings = loadGlobalSettings();
+        console.log(`File: ${globalSettingsPath()}`);
         if (settings.codex?.path) {
           console.log(`  Configured path: ${settings.codex.path}`);
         } else {
@@ -217,7 +188,7 @@ export function registerConfigCommand(program: Command): void {
         }
         const detected = detectCodexPath();
         if (detected) console.log(`  Auto-detected: ${detected}`);
-        const inv = resolveCodexInvocation(projectPath);
+        const inv = resolveCodexInvocation();
         console.log(`  In use: ${inv.bin}`);
         console.log(`  Source: ${inv.source}`);
       } catch (e) {
@@ -228,13 +199,10 @@ export function registerConfigCommand(program: Command): void {
   codex
     .command('clear')
     .description('Clear Codex path (restore auto-detection)')
-    .option('-p, --path <dir>', 'Project directory')
-    .argument('[path]', 'projectPath (positional)')
-    .action((pathPos: string | undefined, opts: { path?: string }) => {
+    .action(() => {
       try {
-        const projectPath = resolveConfigPath(opts.path, pathPos);
-        clearCodexPath(projectPath);
-        console.log(`Codex config cleared: ${projectPath}`);
+        clearCodexPath();
+        console.log(`Codex config cleared: ${globalSettingsPath()}`);
       } catch (e) {
         handleError(e);
       }
@@ -257,19 +225,17 @@ export function registerConfigCommand(program: Command): void {
   rg
     .command('set')
     .description('Set full path to rg.exe')
-    .option('-p, --path <dir>', 'Project directory')
     .argument('<rgPath>', 'Full path to rg.exe')
-    .action((rgPath: string, opts: { path?: string }) => {
+    .action((rgPath: string) => {
       try {
-        const projectPath = resolveConfigPath(opts.path, undefined);
-        setRgPath(projectPath, rgPath);
-        const inv = resolveRgInvocation(projectPath);
+        setRgPath(rgPath);
+        const inv = resolveRgInvocation();
         console.log(`ripgrep set: ${rgPath}`);
         if (inv) {
           console.log(`  Invocation: ${inv.path}`);
           console.log(`  Source: ${inv.source}`);
         }
-        console.log(`  File: ${projectPath}\\.mrcx\\settings.json`);
+        console.log(`  File: ${globalSettingsPath()}`);
       } catch (e) {
         handleError(e);
       }
@@ -278,13 +244,10 @@ export function registerConfigCommand(program: Command): void {
   rg
     .command('show')
     .description('Show ripgrep settings and resolved path')
-    .option('-p, --path <dir>', 'Project directory')
-    .argument('[path]', 'projectPath (positional)')
-    .action((pathPos: string | undefined, opts: { path?: string }) => {
+    .action(() => {
       try {
-        const projectPath = resolveConfigPath(opts.path, pathPos);
-        const settings = loadSettings(projectPath);
-        console.log(`Project: ${projectPath}`);
+        const settings = loadGlobalSettings();
+        console.log(`File: ${globalSettingsPath()}`);
         if (settings.tools?.rgPath) {
           console.log(`  Configured path: ${settings.tools.rgPath}`);
         } else {
@@ -292,7 +255,7 @@ export function registerConfigCommand(program: Command): void {
         }
         const detected = detectRgPath();
         if (detected) console.log(`  Auto-detected: ${detected}`);
-        const inv = resolveRgInvocation(projectPath);
+        const inv = resolveRgInvocation();
         if (inv) {
           console.log(`  In use: ${inv.path}`);
           console.log(`  Source: ${inv.source}`);
@@ -307,13 +270,10 @@ export function registerConfigCommand(program: Command): void {
   rg
     .command('clear')
     .description('Clear ripgrep path settings')
-    .option('-p, --path <dir>', 'Project directory')
-    .argument('[path]', 'projectPath (positional)')
-    .action((pathPos: string | undefined, opts: { path?: string }) => {
+    .action(() => {
       try {
-        const projectPath = resolveConfigPath(opts.path, pathPos);
-        clearRgPath(projectPath);
-        console.log(`ripgrep config cleared: ${projectPath}`);
+        clearRgPath();
+        console.log(`ripgrep config cleared: ${globalSettingsPath()}`);
       } catch (e) {
         handleError(e);
       }

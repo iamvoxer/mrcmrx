@@ -1,5 +1,5 @@
 import type { Command } from 'commander';
-import { getStatus, loadSettings, MrcxError } from '@mrcx/core';
+import { getStatus, loadGlobalSettings, MrcxError } from '@mrcx/core';
 import { resolveProjectPathArg } from '../parse-args.js';
 import { formatCwdMismatchWarning } from '../ux-hints.js';
 
@@ -13,7 +13,7 @@ export function registerStatusCommand(program: Command): void {
       try {
         const base = resolveProjectPathArg(opts.path, pathPos);
         const s = getStatus(base);
-        const proxy = loadSettings(s.room.projectPath).proxy;
+        const proxy = loadGlobalSettings().proxy;
         console.log(`Cwd:   ${s.cwd}`);
         console.log(`Room:  ${s.room.id} — ${s.room.name}`);
         console.log(`Path:  ${s.room.projectPath}`);

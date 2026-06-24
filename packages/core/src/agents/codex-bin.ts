@@ -1,7 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { loadSettings } from '../config/settings.js';
-import { resolveProjectPath } from '../paths.js';
+import { loadGlobalSettings } from '../config/settings.js';
 
 export interface CodexInvocation {
   bin: string;
@@ -63,12 +62,10 @@ export function resolveCodexInvocation(
     return { bin: explicitBin, prefix: explicitPrefix, source: 'env' };
   }
 
-  if (projectPath) {
-    const configured = loadSettings(resolveProjectPath(projectPath)).codex?.path?.trim();
-    if (configured) {
-      assertCodexExecutable(configured);
-      return { bin: configured, prefix: explicitPrefix, source: 'configured' };
-    }
+  const configured = loadGlobalSettings().codex?.path?.trim();
+  if (configured) {
+    assertCodexExecutable(configured);
+    return { bin: configured, prefix: explicitPrefix, source: 'configured' };
   }
 
   const local = findWindowsLocalCodexExe();

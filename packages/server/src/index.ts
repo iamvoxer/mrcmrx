@@ -18,7 +18,8 @@ import {
   getStatus,
   loadContext,
   loadMessages,
-  loadSettings,
+  loadGlobalSettings,
+  globalSettingsPath,
   listStagesForRoom,
   loadRunDetail,
   MrcxError,
@@ -382,30 +383,26 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, pa
 
     if (method === 'GET' && pathname === '/api/config') {
       const url = new URL(req.url ?? '/', 'http://localhost');
-      const projectPath = url.searchParams.get('projectPath');
-      if (!projectPath) {
-        sendJson(res, 400, { error: 'projectPath is required' });
-        return true;
-      }
-      const resolved = resolveProjectPath(projectPath);
-      const settings = loadSettings(resolved);
+      const projectPathParam = url.searchParams.get('projectPath');
+      const cwd = projectPathParam ? resolveProjectPath(projectPathParam) : process.cwd();
+      const settings = loadGlobalSettings();
       let cursorResolved: { node: string; index: string; source: string } | null = null;
       let codexResolved: { bin: string; source: string } | null = null;
       let rgResolved: { path: string; source: string } | null = null;
       try {
-        const inv = resolveCursorAgentInvocation(resolved);
+        const inv = resolveCursorAgentInvocation(cwd);
         cursorResolved = { node: inv.node, index: inv.index, source: inv.source };
       } catch {
         cursorResolved = null;
       }
       try {
-        const inv = resolveCodexInvocation(resolved);
+        const inv = resolveCodexInvocation(cwd);
         codexResolved = { bin: inv.bin, source: inv.source };
       } catch {
         codexResolved = null;
       }
       try {
-        rgResolved = resolveRgInvocation(resolved);
+        rgResolved = resolveRgInvocation(cwd);
       } catch {
         rgResolved = null;
       }
@@ -420,7 +417,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, pa
         rgPath: settings.tools?.rgPath ?? null,
         rgDetected: detectRgPath(),
         rgResolved,
-        projectPath: resolved,
+        settingsPath: globalSettingsPath(),
       });
       return true;
     }
@@ -432,26 +429,22 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, pa
 
     if (method === 'PUT' && pathname === '/api/config/cursor-agent') {
       const body = await readJsonBody<{ path?: string; projectPath?: string }>(req);
-      if (!body.projectPath?.trim() || !body.path?.trim()) {
-        sendJson(res, 400, { error: 'projectPath and path are required' });
+      if (!body.path?.trim()) {
+        sendJson(res, 400, { error: 'path is required' });
         return true;
       }
-      setCursorAgentPath(body.projectPath.trim(), body.path.trim());
-      const inv = resolveCursorAgentInvocation(body.projectPath);
+      setCursorAgentPath(body.path.trim());
+      const cwd = body.projectPath?.trim() ? resolveProjectPath(body.projectPath) : process.cwd();
+      const inv = resolveCursorAgentInvocation(cwd);
       sendJson(res, 200, {
-        cursorAgent: loadSettings(body.projectPath).cursorAgent?.path ?? null,
+        cursorAgent: loadGlobalSettings().cursorAgent?.path ?? null,
         cursorAgentResolved: { node: inv.node, index: inv.index, source: inv.source },
       });
       return true;
     }
 
     if (method === 'DELETE' && pathname === '/api/config/cursor-agent') {
-      const body = await readJsonBody<{ projectPath?: string }>(req);
-      if (!body.projectPath?.trim()) {
-        sendJson(res, 400, { error: 'projectPath is required' });
-        return true;
-      }
-      clearCursorAgentPath(body.projectPath.trim());
+      clearCursorAgentPath();
       sendJson(res, 200, { ok: true });
       return true;
     }
@@ -463,26 +456,22 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, pa
 
     if (method === 'PUT' && pathname === '/api/config/codex') {
       const body = await readJsonBody<{ path?: string; projectPath?: string }>(req);
-      if (!body.projectPath?.trim() || !body.path?.trim()) {
-        sendJson(res, 400, { error: 'projectPath and path are required' });
+      if (!body.path?.trim()) {
+        sendJson(res, 400, { error: 'path is required' });
         return true;
       }
-      setCodexPath(body.projectPath.trim(), body.path.trim());
-      const inv = resolveCodexInvocation(body.projectPath);
+      setCodexPath(body.path.trim());
+      const cwd = body.projectPath?.trim() ? resolveProjectPath(body.projectPath) : process.cwd();
+      const inv = resolveCodexInvocation(cwd);
       sendJson(res, 200, {
-        codex: loadSettings(body.projectPath).codex?.path ?? null,
+        codex: loadGlobalSettings().codex?.path ?? null,
         codexResolved: { bin: inv.bin, source: inv.source },
       });
       return true;
     }
 
     if (method === 'DELETE' && pathname === '/api/config/codex') {
-      const body = await readJsonBody<{ projectPath?: string }>(req);
-      if (!body.projectPath?.trim()) {
-        sendJson(res, 400, { error: 'projectPath is required' });
-        return true;
-      }
-      clearCodexPath(body.projectPath.trim());
+      clearCodexPath();
       sendJson(res, 200, { ok: true });
       return true;
     }
@@ -494,48 +483,39 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, pa
 
     if (method === 'PUT' && pathname === '/api/config/rg') {
       const body = await readJsonBody<{ path?: string; projectPath?: string }>(req);
-      if (!body.projectPath?.trim() || !body.path?.trim()) {
-        sendJson(res, 400, { error: 'projectPath and path are required' });
+      if (!body.path?.trim()) {
+        sendJson(res, 400, { error: 'path is required' });
         return true;
       }
-      setRgPath(body.projectPath.trim(), body.path.trim());
-      const inv = resolveRgInvocation(body.projectPath);
+      setRgPath(body.path.trim());
+      const cwd = body.projectPath?.trim() ? resolveProjectPath(body.projectPath) : process.cwd();
+      const inv = resolveRgInvocation(cwd);
       sendJson(res, 200, {
-        rgPath: loadSettings(body.projectPath).tools?.rgPath ?? null,
+        rgPath: loadGlobalSettings().tools?.rgPath ?? null,
         rgResolved: inv,
       });
       return true;
     }
 
     if (method === 'DELETE' && pathname === '/api/config/rg') {
-      const body = await readJsonBody<{ projectPath?: string }>(req);
-      if (!body.projectPath?.trim()) {
-        sendJson(res, 400, { error: 'projectPath is required' });
-        return true;
-      }
-      clearRgPath(body.projectPath.trim());
+      clearRgPath();
       sendJson(res, 200, { ok: true });
       return true;
     }
 
     if (method === 'PUT' && pathname === '/api/config/proxy') {
-      const body = await readJsonBody<{ url?: string; projectPath?: string }>(req);
-      if (!body.projectPath?.trim() || !body.url?.trim()) {
-        sendJson(res, 400, { error: 'projectPath and url are required' });
+      const body = await readJsonBody<{ url?: string }>(req);
+      if (!body.url?.trim()) {
+        sendJson(res, 400, { error: 'url is required' });
         return true;
       }
-      setProxyUrl(body.projectPath.trim(), body.url.trim());
-      sendJson(res, 200, { proxy: loadSettings(body.projectPath).proxy ?? null });
+      setProxyUrl(body.url.trim());
+      sendJson(res, 200, { proxy: loadGlobalSettings().proxy ?? null });
       return true;
     }
 
     if (method === 'DELETE' && pathname === '/api/config/proxy') {
-      const body = await readJsonBody<{ projectPath?: string }>(req);
-      if (!body.projectPath?.trim()) {
-        sendJson(res, 400, { error: 'projectPath is required' });
-        return true;
-      }
-      clearProxy(body.projectPath.trim());
+      clearProxy();
       sendJson(res, 200, { ok: true });
       return true;
     }

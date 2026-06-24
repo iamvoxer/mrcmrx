@@ -19,8 +19,6 @@ The goal is not full automation. The goal is controlled collaboration:
 
 ## Screenshots
 
-> TODO: Replace these placeholders with real screenshots before publishing.
-
 ### Project room
 
 <!-- Screenshot placeholder:
@@ -36,36 +34,6 @@ A room view showing:
 -->
 
 ![Project room screenshot placeholder](docs/images/project-room.png)
-
-### Review flow
-
-<!-- Screenshot placeholder:
-docs/images/review-flow.png
-
-Suggested screenshot:
-A review screen showing:
-- Mr C changed files
-- git diff summary
-- Mr X review with Must Fix / Should Fix / Nice to Have
-- user selection of accepted items
--->
-
-![Review flow screenshot placeholder](docs/images/review-flow.png)
-
-### CLI demo
-
-<!-- Screenshot placeholder:
-docs/images/cli-demo.png
-
-Suggested screenshot:
-Terminal running:
-npm run mrcx -- start "..."
-npm run mrcx -- next
-npm run mrcx -- status
--->
-
-![CLI demo screenshot placeholder](docs/images/cli-demo.png)
-
 ---
 
 ## Why this exists

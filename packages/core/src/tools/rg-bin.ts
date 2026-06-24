@@ -1,8 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { loadSettings } from '../config/settings.js';
-import { resolveProjectPath } from '../paths.js';
+import { loadGlobalSettings } from '../config/settings.js';
 
 export interface RgInvocation {
   path: string;
@@ -68,12 +67,10 @@ export function resolveRgInvocation(
   projectPath?: string,
   env: NodeJS.ProcessEnv = process.env,
 ): RgInvocation | null {
-  if (projectPath) {
-    const configured = loadSettings(resolveProjectPath(projectPath)).tools?.rgPath?.trim();
-    if (configured) {
-      assertRgExecutable(configured);
-      return { path: path.resolve(configured), source: 'configured' };
-    }
+  const configured = loadGlobalSettings().tools?.rgPath?.trim();
+  if (configured) {
+    assertRgExecutable(configured);
+    return { path: path.resolve(configured), source: 'configured' };
   }
 
   const detected = detectRgPath(env);

@@ -1,65 +1,11 @@
-import { execFileSync } from 'node:child_process';
-import http from 'node:http';
-import https from 'node:https';
-import { URL } from 'node:url';
-import { buildSpawnEnvWithMeta } from '../config/settings.js';
+import { fetch, ProxyAgent, type Dispatcher } from 'undici';
+import { resolveEffectiveProxyUrl, resolveSettingsProxyUrl } from '../config/settings.js';
 import { MrcxError } from '../services/context.js';
 
 export const CHATGPT_CONNECTIVITY_URL = 'https://chatgpt.com/';
-const PROBE_TIMEOUT_MS = 5000;
+const PROBE_TIMEOUT_MS = 12_000;
 
-export type HeadRequestFn = (url: string, timeoutMs: number) => Promise<boolean>;
-export type HeadViaProxyFn = (url: string, proxyUrl: string, timeoutMs: number) => Promise<boolean>;
-
-export function proxyUrlFromEnv(env: NodeJS.ProcessEnv): string | undefined {
-  const httpsProxy = env.HTTPS_PROXY ?? env.https_proxy;
-  if (httpsProxy?.trim()) return httpsProxy.trim();
-  const httpProxy = env.HTTP_PROXY ?? env.http_proxy;
-  if (httpProxy?.trim()) return httpProxy.trim();
-  return undefined;
-}
-
-/** Normalize Windows Internet Settings ProxyServer value to an http:// URL. */
-export function normalizeWindowsProxyServer(raw: string): string | undefined {
-  const text = raw.trim();
-  if (!text) return undefined;
-  const httpsMatch = text.match(/(?:^|;)\s*https=([^;\s]+)/i);
-  if (httpsMatch?.[1]) {
-    const host = httpsMatch[1].trim();
-    return host.includes('://') ? host : `http://${host}`;
-  }
-  const first = text.split(';')[0]?.replace(/^(?:https?|socks)=/i, '').trim();
-  if (!first || /^socks/i.test(text)) return undefined;
-  return first.includes('://') ? first : `http://${first}`;
-}
-
-/** Read Windows user Internet Settings proxy (same source browsers often use). */
-export function readWindowsSystemProxy(): string | undefined {
-  if (process.platform !== 'win32') return undefined;
-  try {
-    const enableOut = execFileSync(
-      'reg',
-      ['query', 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings', '/v', 'ProxyEnable'],
-      { encoding: 'utf8', windowsHide: true },
-    );
-    if (!/0x1\b/.test(enableOut)) return undefined;
-    const serverOut = execFileSync(
-      'reg',
-      ['query', 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings', '/v', 'ProxyServer'],
-      { encoding: 'utf8', windowsHide: true },
-    );
-    const match = serverOut.match(/ProxyServer\s+REG_SZ\s+(\S.+)$/m);
-    if (!match?.[1]) return undefined;
-    return normalizeWindowsProxyServer(match[1].trim());
-  } catch {
-    return undefined;
-  }
-}
-
-/** Proxy used for the probe: settings/CLI env first, then Windows system proxy. */
-export function resolveProbeProxyUrl(env: NodeJS.ProcessEnv): string | undefined {
-  return proxyUrlFromEnv(env) ?? readWindowsSystemProxy();
-}
+export { resolveEffectiveProxyUrl, resolveSettingsProxyUrl } from '../config/settings.js';
 
 export function formatChatGptConnectivityError(proxyUrl?: string): string {
   const lines = [
@@ -72,137 +18,60 @@ export function formatChatGptConnectivityError(proxyUrl?: string): string {
   return lines.join('\n');
 }
 
-export function httpsHeadDirect(url: string, timeoutMs: number): Promise<boolean> {
-  const target = new URL(url);
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => {
-      req.destroy();
-      resolve(false);
-    }, timeoutMs);
-    const req = https.request(
-      {
-        hostname: target.hostname,
-        port: Number(target.port) || 443,
-        method: 'HEAD',
-        path: target.pathname + target.search,
-        timeout: timeoutMs,
-      },
-      (res) => {
-        clearTimeout(timer);
-        res.resume();
-        resolve(true);
-      },
-    );
-    req.on('error', () => {
-      clearTimeout(timer);
-      resolve(false);
-    });
-    req.on('timeout', () => {
-      clearTimeout(timer);
-      req.destroy();
-      resolve(false);
-    });
-    req.end();
-  });
-}
+export type UndiciFetch = typeof fetch;
 
-export function httpsHeadViaHttpProxy(url: string, proxyUrl: string, timeoutMs: number): Promise<boolean> {
-  const target = new URL(url);
-  const proxy = new URL(proxyUrl);
-
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => {
-      connectReq.destroy();
-      resolve(false);
-    }, timeoutMs);
-
-    const connectReq = http.request({
-      hostname: proxy.hostname,
-      port: proxy.port || (proxy.protocol === 'https:' ? 443 : 80),
-      method: 'CONNECT',
-      path: `${target.hostname}:${target.port || 443}`,
-      timeout: timeoutMs,
-    });
-
-    connectReq.on('connect', (res, socket) => {
-      if (res.statusCode !== 200) {
-        clearTimeout(timer);
-        socket.destroy();
-        resolve(false);
-        return;
-      }
-      const req = https.request(
-        {
-          hostname: target.hostname,
-          port: Number(target.port) || 443,
-          method: 'HEAD',
-          path: target.pathname + target.search,
-          socket,
-          servername: target.hostname,
-          timeout: timeoutMs,
-        } as https.RequestOptions,
-        (headRes) => {
-          clearTimeout(timer);
-          headRes.resume();
-          resolve(true);
-        },
-      );
-      req.on('error', () => {
-        clearTimeout(timer);
-        resolve(false);
-      });
-      req.on('timeout', () => {
-        clearTimeout(timer);
-        req.destroy();
-        resolve(false);
-      });
-      req.end();
-    });
-
-    connectReq.on('error', () => {
-      clearTimeout(timer);
-      resolve(false);
-    });
-    connectReq.on('timeout', () => {
-      clearTimeout(timer);
-      connectReq.destroy();
-      resolve(false);
-    });
-    connectReq.end();
-  });
+/** True when any HTTP response is received (status code does not matter). */
+export function isConnectivityResponse(status: number): boolean {
+  return status >= 100 && status < 600;
 }
 
 export async function probeChatGptConnectivity(
-  env: NodeJS.ProcessEnv,
+  proxyUrl: string | undefined,
   options: {
-    resolveProxy?: (env: NodeJS.ProcessEnv) => string | undefined;
-    headDirect?: HeadRequestFn;
-    headViaProxy?: HeadViaProxyFn;
+    fetchImpl?: UndiciFetch;
+    createProxyAgent?: (proxyUrl: string) => Dispatcher;
   } = {},
 ): Promise<boolean> {
-  const resolveProxy = options.resolveProxy ?? resolveProbeProxyUrl;
-  const headDirect = options.headDirect ?? httpsHeadDirect;
-  const headViaProxy = options.headViaProxy ?? httpsHeadViaHttpProxy;
-  const proxyUrl = resolveProxy(env);
-  if (proxyUrl) {
-    return headViaProxy(CHATGPT_CONNECTIVITY_URL, proxyUrl, PROBE_TIMEOUT_MS);
+  const doFetch = options.fetchImpl ?? fetch;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+  let dispatcher: Dispatcher | undefined;
+
+  try {
+    if (proxyUrl) {
+      const create = options.createProxyAgent ?? ((url: string) => new ProxyAgent(url));
+      dispatcher = create(proxyUrl);
+    }
+    const res = await doFetch(CHATGPT_CONNECTIVITY_URL, {
+      method: 'GET',
+      signal: controller.signal,
+      redirect: 'follow',
+      dispatcher,
+    });
+    await res.body?.cancel();
+    return isConnectivityResponse(res.status);
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+    if (dispatcher && 'close' in dispatcher && typeof dispatcher.close === 'function') {
+      await dispatcher.close().catch(() => {});
+    }
   }
-  return headDirect(CHATGPT_CONNECTIVITY_URL, PROBE_TIMEOUT_MS);
 }
 
 export interface ChatGptConnectivityOptions {
   /** @internal Override network probe (tests). */
-  probe?: (env: NodeJS.ProcessEnv) => Promise<boolean>;
+  probe?: (proxyUrl: string | undefined) => Promise<boolean>;
 }
 
 export async function checkChatGptConnectivity(
   projectPath: string,
   options: ChatGptConnectivityOptions = {},
 ): Promise<void> {
-  const { env } = buildSpawnEnvWithMeta(projectPath);
-  const proxyUrl = resolveProbeProxyUrl(env);
-  const probe = options.probe ?? probeChatGptConnectivity;
-  const ok = await probe(env);
+  const proxyUrl = resolveEffectiveProxyUrl(projectPath);
+  const probe = options.probe ?? ((url) => probeChatGptConnectivity(url));
+  const ok = await probe(proxyUrl);
   if (!ok) {
     throw new MrcxError(formatChatGptConnectivityError(proxyUrl));
   }

@@ -4,8 +4,21 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { resolveCursorAgentFromPath } from './cursor-bin.js';
-import { loadSettings, setCursorAgentPath } from '../config/settings.js';
+import { loadGlobalSettings, setCursorAgentPath } from '../config/settings.js';
 import { resolveCursorAgentInvocation } from './cursor-bin.js';
+
+function withGlobalDir<T>(fn: () => T): T {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mrcx-cursor-global-'));
+  const prev = process.env.MRCX_GLOBAL_DIR;
+  process.env.MRCX_GLOBAL_DIR = dir;
+  try {
+    return fn();
+  } finally {
+    if (prev === undefined) delete process.env.MRCX_GLOBAL_DIR;
+    else process.env.MRCX_GLOBAL_DIR = prev;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
 
 test('resolveCursorAgentFromPath accepts index.js', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mrcx-cursor-'));
@@ -20,18 +33,18 @@ test('resolveCursorAgentFromPath accepts index.js', () => {
 });
 
 test('settings cursorAgent.path is used by resolveCursorAgentInvocation', () => {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mrcx-cursor2-'));
-  const projectPath = path.join(tmp, 'proj');
-  fs.mkdirSync(projectPath, { recursive: true });
-  const versionDir = path.join(tmp, 'agent-ver');
-  fs.mkdirSync(versionDir);
-  fs.writeFileSync(path.join(versionDir, 'index.js'), '// agent');
-  fs.writeFileSync(path.join(versionDir, process.platform === 'win32' ? 'node.exe' : 'node'), '');
+  withGlobalDir(() => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mrcx-cursor2-'));
+    const versionDir = path.join(tmp, 'agent-ver');
+    fs.mkdirSync(versionDir);
+    fs.writeFileSync(path.join(versionDir, 'index.js'), '// agent');
+    fs.writeFileSync(path.join(versionDir, process.platform === 'win32' ? 'node.exe' : 'node'), '');
 
-  setCursorAgentPath(projectPath, path.join(versionDir, 'node.exe'));
-  assert.equal(loadSettings(projectPath).cursorAgent?.path, path.join(versionDir, 'node.exe'));
+    setCursorAgentPath(path.join(versionDir, 'node.exe'));
+    assert.equal(loadGlobalSettings().cursorAgent?.path, path.join(versionDir, 'node.exe'));
 
-  const inv = resolveCursorAgentInvocation(projectPath);
-  assert.equal(inv.source, 'configured');
-  assert.equal(inv.index, path.join(versionDir, 'index.js'));
+    const inv = resolveCursorAgentInvocation();
+    assert.equal(inv.source, 'configured');
+    assert.equal(inv.index, path.join(versionDir, 'index.js'));
+  });
 });

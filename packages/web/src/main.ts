@@ -22,6 +22,7 @@ interface AppState {
   codexResolved: string | null;
   rgPath: string | null;
   rgResolved: string | null;
+  globalSettingsPath: string | null;
   artifacts: Array<{ path: string; name: string; size: number }>;
   loading: boolean;
   chatNotice: { text: string; error: boolean } | null;
@@ -44,6 +45,7 @@ const state: AppState = {
   codexResolved: null,
   rgPath: null,
   rgResolved: null,
+  globalSettingsPath: null,
   artifacts: [],
   loading: false,
   chatNotice: null,
@@ -277,13 +279,8 @@ function syncDialogFeedback(scope: DialogScope): void {
   }
 }
 
-async function selectRoom(room: Room): Promise<void> {
-  state.chatNotice = null;
-  const { room: active, context } = await api.useRoom(room.id);
-  state.activeRoom = active;
-  const { stages } = await api.listStages(active.id);
-  state.stages = stages;
-  const cfg = await api.getConfig(active.projectPath);
+async function loadToolConfig(projectPath?: string): Promise<void> {
+  const cfg = await api.getConfig(projectPath);
   state.proxyUrl = cfg.proxy?.url ?? null;
   state.cursorAgentPath = cfg.cursorAgent ?? null;
   state.cursorAgentResolved = cfg.cursorAgentResolved?.node ?? null;
@@ -291,6 +288,15 @@ async function selectRoom(room: Room): Promise<void> {
   state.codexResolved = cfg.codexResolved?.bin ?? null;
   state.rgPath = cfg.rgPath ?? null;
   state.rgResolved = cfg.rgResolved?.path ?? null;
+  state.globalSettingsPath = cfg.settingsPath ?? null;
+}
+
+async function selectRoom(room: Room): Promise<void> {
+  state.chatNotice = null;
+  const { room: active, context } = await api.useRoom(room.id);
+  state.activeRoom = active;
+  const { stages } = await api.listStages(active.id);
+  state.stages = stages;
   const { artifacts } = await api.listArtifacts(active.id);
   state.artifacts = artifacts;
   const stageId = context.currentStageId;
@@ -316,6 +322,7 @@ async function loadInitial(): Promise<void> {
   state.loading = true;
   try {
     await refreshRooms();
+    await loadToolConfig();
     if (state.rooms.length > 0) {
       await selectRoom(state.rooms[0]);
     }
@@ -599,7 +606,7 @@ function mount(): void {
             </div>
           </label>
           <p class="dialog-help" id="rg-resolved">ripgrep in use: (not loaded)</p>
-          <p class="dialog-help">Saved to .mrcx/settings.json. Leave path or proxy empty and save to clear and restore auto-detection.</p>
+          <p class="dialog-help" id="config-save-hint">Saved to user settings. Leave path or proxy empty and save to clear and restore auto-detection.</p>
           <div class="dialog-actions">
             <button type="button" class="ghost-button" id="config-cancel">Cancel</button>
             <button type="submit" class="primary-inline">Save</button>
@@ -817,6 +824,12 @@ async function pickRoomDirectory(): Promise<void> {
 
 function openConfigDialog(): void {
   clearDialogFeedback('config');
+  const hint = document.querySelector('#config-save-hint');
+  if (hint) {
+    hint.textContent = state.globalSettingsPath
+      ? `Saved to ${state.globalSettingsPath}. Leave path or proxy empty and save to clear and restore auto-detection.`
+      : 'Saved to user settings. Leave path or proxy empty and save to clear and restore auto-detection.';
+  }
   const input = document.querySelector('#proxy-url') as HTMLInputElement;
   if (input) input.value = state.proxyUrl ?? '';
   const agentInput = document.querySelector('#cursor-agent-path') as HTMLInputElement;
@@ -1246,51 +1259,52 @@ function bindEventsOnce(): void {
 
   document.querySelector('#config-form')?.addEventListener('submit', async (e) => {
     e.preventDefault();
-    if (!state.activeRoom) return;
     const url = (document.querySelector('#proxy-url') as HTMLInputElement).value.trim();
     const codexPathVal = (document.querySelector('#codex-path') as HTMLInputElement).value.trim();
     const agentPath = (document.querySelector('#cursor-agent-path') as HTMLInputElement).value.trim();
     const rgPathVal = (document.querySelector('#rg-path') as HTMLInputElement).value.trim();
+    const resolveCwd = state.activeRoom?.projectPath;
     setDialogLoading('config', true, 'Saving…');
     try {
       state.dialogFeedback.config.error = null;
       syncDialogFeedback('config');
       if (url) {
-        await api.setProxy(state.activeRoom.projectPath, url);
+        await api.setProxy(url);
         state.proxyUrl = url;
       } else {
-        await api.clearProxy(state.activeRoom.projectPath);
+        await api.clearProxy();
         state.proxyUrl = null;
       }
       if (codexPathVal) {
-        const { codexResolved } = await api.setCodex(state.activeRoom.projectPath, codexPathVal);
+        const { codexResolved } = await api.setCodex(codexPathVal, resolveCwd);
         state.codexPath = codexPathVal;
         state.codexResolved = codexResolved?.bin ?? null;
       } else {
-        await api.clearCodex(state.activeRoom.projectPath);
+        await api.clearCodex();
         state.codexPath = null;
-        const cfgCodex = await api.getConfig(state.activeRoom.projectPath);
+        const cfgCodex = await api.getConfig(resolveCwd);
         state.codexResolved = cfgCodex.codexResolved?.bin ?? null;
       }
       if (agentPath) {
-        const { cursorAgentResolved } = await api.setCursorAgent(state.activeRoom.projectPath, agentPath);
+        const { cursorAgentResolved } = await api.setCursorAgent(agentPath, resolveCwd);
         state.cursorAgentPath = agentPath;
         state.cursorAgentResolved = cursorAgentResolved?.node ?? null;
       } else {
-        await api.clearCursorAgent(state.activeRoom.projectPath);
+        await api.clearCursorAgent();
         state.cursorAgentPath = null;
-        const cfg = await api.getConfig(state.activeRoom.projectPath);
+        const cfg = await api.getConfig(resolveCwd);
         state.cursorAgentResolved = cfg.cursorAgentResolved?.node ?? null;
       }
       if (rgPathVal) {
-        const { rgResolved } = await api.setRg(state.activeRoom.projectPath, rgPathVal);
+        const { rgResolved } = await api.setRg(rgPathVal, resolveCwd);
         state.rgPath = rgPathVal;
         state.rgResolved = rgResolved?.path ?? null;
       } else {
-        await api.clearRg(state.activeRoom.projectPath);
+        await api.clearRg();
         state.rgPath = null;
         state.rgResolved = null;
       }
+      await loadToolConfig(resolveCwd);
       syncCursorAgentResolvedHint();
       syncCodexResolvedHint();
       syncRgResolvedHint();
@@ -1390,7 +1404,6 @@ async function deleteActiveRoom(): Promise<void> {
     state.stages = [];
     state.messages = [];
     state.artifacts = [];
-    state.proxyUrl = null;
     if (state.rooms.length > 0) {
       await selectRoom(state.rooms[0]);
     }

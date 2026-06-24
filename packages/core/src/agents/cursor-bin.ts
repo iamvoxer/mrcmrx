@@ -1,8 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { loadSettings } from '../config/settings.js';
-import { resolveProjectPath } from '../paths.js';
+import { loadGlobalSettings } from '../config/settings.js';
 
 export interface CursorAgentInvocation {
   node: string;
@@ -84,7 +83,7 @@ function autoDiscoverCursorAgent(): CursorAgentInvocation {
   if (unixFound) return unixFound;
 
   throw new Error(
-    'cursor-agent not found. Install it or set cursorAgent.path in .mrcx/settings.json',
+    'cursor-agent not found. Install it or set cursorAgent.path in user settings (~/.mrcx/settings.json)',
   );
 }
 
@@ -107,11 +106,9 @@ export function resolveCursorAgentInvocation(projectPath?: string): CursorAgentI
     return resolveCursorAgentFromPath(envPath);
   }
 
-  if (projectPath) {
-    const configured = loadSettings(resolveProjectPath(projectPath)).cursorAgent?.path?.trim();
-    if (configured) {
-      return resolveCursorAgentFromPath(configured);
-    }
+  const configured = loadGlobalSettings().cursorAgent?.path?.trim();
+  if (configured) {
+    return resolveCursorAgentFromPath(configured);
   }
 
   return autoDiscoverCursorAgent();

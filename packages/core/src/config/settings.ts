@@ -1,6 +1,7 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
-import { readJson, resolveProjectPath, writeJson } from '../paths.js';
+import { ensureDir, readJson, resolveProjectPath, writeJson } from '../paths.js';
 
 export interface MrcxProxySettings {
   /** Sets both HTTP_PROXY and HTTPS_PROXY */
@@ -24,6 +25,29 @@ export interface MrcxSettings {
   tools?: MrcxToolSettings;
 }
 
+/** User-level .mrcx directory (override with MRCX_GLOBAL_DIR in tests). */
+export function globalMrcxDir(): string {
+  const fromEnv = process.env.MRCX_GLOBAL_DIR?.trim();
+  if (fromEnv) return path.resolve(fromEnv);
+  return path.join(os.homedir(), '.mrcx');
+}
+
+export function globalSettingsPath(): string {
+  return path.join(globalMrcxDir(), 'settings.json');
+}
+
+export function loadGlobalSettings(): MrcxSettings {
+  const file = globalSettingsPath();
+  if (!fs.existsSync(file)) return {};
+  return readJson<MrcxSettings>(file);
+}
+
+export function saveGlobalSettings(settings: MrcxSettings): void {
+  ensureDir(globalMrcxDir());
+  writeJson(globalSettingsPath(), settings);
+}
+
+/** Project-level settings path (room data lives under project .mrcx; tool paths are global). */
 export function settingsPath(projectPath: string): string {
   return path.join(resolveProjectPath(projectPath), '.mrcx', 'settings.json');
 }
@@ -52,62 +76,62 @@ export function findMrcxProjectPath(startDir = process.cwd()): string {
   return resolveProjectPath(startDir);
 }
 
-export function setProxyUrl(projectPath: string, url: string): MrcxSettings {
-  const settings = loadSettings(projectPath);
+export function setProxyUrl(url: string): MrcxSettings {
+  const settings = loadGlobalSettings();
   settings.proxy = { url: url.trim() };
-  saveSettings(projectPath, settings);
+  saveGlobalSettings(settings);
   return settings;
 }
 
-export function clearProxy(projectPath: string): MrcxSettings {
-  const settings = loadSettings(projectPath);
+export function clearProxy(): MrcxSettings {
+  const settings = loadGlobalSettings();
   delete settings.proxy;
-  saveSettings(projectPath, settings);
+  saveGlobalSettings(settings);
   return settings;
 }
 
-export function setCursorAgentPath(projectPath: string, agentPath: string): MrcxSettings {
-  const settings = loadSettings(projectPath);
+export function setCursorAgentPath(agentPath: string): MrcxSettings {
+  const settings = loadGlobalSettings();
   settings.cursorAgent = { path: agentPath.trim() };
-  saveSettings(projectPath, settings);
+  saveGlobalSettings(settings);
   return settings;
 }
 
-export function clearCursorAgentPath(projectPath: string): MrcxSettings {
-  const settings = loadSettings(projectPath);
+export function clearCursorAgentPath(): MrcxSettings {
+  const settings = loadGlobalSettings();
   delete settings.cursorAgent;
-  saveSettings(projectPath, settings);
+  saveGlobalSettings(settings);
   return settings;
 }
 
-export function setCodexPath(projectPath: string, codexPath: string): MrcxSettings {
-  const settings = loadSettings(projectPath);
+export function setCodexPath(codexPath: string): MrcxSettings {
+  const settings = loadGlobalSettings();
   settings.codex = { path: codexPath.trim() };
-  saveSettings(projectPath, settings);
+  saveGlobalSettings(settings);
   return settings;
 }
 
-export function clearCodexPath(projectPath: string): MrcxSettings {
-  const settings = loadSettings(projectPath);
+export function clearCodexPath(): MrcxSettings {
+  const settings = loadGlobalSettings();
   delete settings.codex;
-  saveSettings(projectPath, settings);
+  saveGlobalSettings(settings);
   return settings;
 }
 
-export function setRgPath(projectPath: string, rgPath: string): MrcxSettings {
-  const settings = loadSettings(projectPath);
+export function setRgPath(rgPath: string): MrcxSettings {
+  const settings = loadGlobalSettings();
   settings.tools = { ...settings.tools, rgPath: rgPath.trim() };
-  saveSettings(projectPath, settings);
+  saveGlobalSettings(settings);
   return settings;
 }
 
-export function clearRgPath(projectPath: string): MrcxSettings {
-  const settings = loadSettings(projectPath);
+export function clearRgPath(): MrcxSettings {
+  const settings = loadGlobalSettings();
   if (settings.tools) {
     delete settings.tools.rgPath;
     if (Object.keys(settings.tools).length === 0) delete settings.tools;
   }
-  saveSettings(projectPath, settings);
+  saveGlobalSettings(settings);
   return settings;
 }
 
@@ -157,6 +181,39 @@ export function proxyEnvFromSettings(settings: MrcxSettings): Record<string, str
   return env;
 }
 
+const PROXY_ENV_KEYS = [
+  'HTTP_PROXY',
+  'HTTPS_PROXY',
+  'http_proxy',
+  'https_proxy',
+  'ALL_PROXY',
+  'all_proxy',
+  'NO_PROXY',
+  'no_proxy',
+] as const;
+
+export function stripProxyEnvVars(env: NodeJS.ProcessEnv): void {
+  for (const key of PROXY_ENV_KEYS) {
+    delete env[key];
+  }
+}
+
+/** Proxy URL from user ~/.mrcx/settings.json only (no process env / system proxy). */
+export function resolveSettingsProxyUrl(_projectPath?: string): string | undefined {
+  const settings = loadGlobalSettings();
+  const p = settings.proxy;
+  if (!p) return undefined;
+  if (p.url?.trim()) return p.url.trim();
+  if (p.https?.trim()) return p.https.trim();
+  if (p.http?.trim()) return p.http.trim();
+  return undefined;
+}
+
+/** Effective proxy for connectivity checks and subprocesses: CLI --proxy, then user settings. */
+export function resolveEffectiveProxyUrl(projectPath?: string): string | undefined {
+  return getCliProxyOverride() ?? resolveSettingsProxyUrl(projectPath);
+}
+
 let cliProxyOverride: string | undefined;
 
 export function setCliProxyOverride(url: string | undefined): void {
@@ -167,12 +224,13 @@ export function getCliProxyOverride(): string | undefined {
   return cliProxyOverride;
 }
 
-/** Env for Codex / Cursor subprocesses (merges shell, settings, --proxy). */
+/** Env for Codex / Cursor subprocesses. Proxy comes from global settings (and optional CLI --proxy), not shell env. */
 export function buildSpawnEnvWithMeta(startDir: string): { env: NodeJS.ProcessEnv; meta: SpawnEnvMeta } {
-  const mrcxRoot = findMrcxProjectPath(startDir);
-  const settings = loadSettings(mrcxRoot);
+  const settings = loadGlobalSettings();
   const fromSettings = proxyEnvFromSettings(settings);
-  const env: NodeJS.ProcessEnv = { ...process.env, ...fromSettings };
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  stripProxyEnvVars(env);
+  Object.assign(env, fromSettings);
 
   const override = getCliProxyOverride();
   if (override) {
@@ -194,6 +252,6 @@ export function buildSpawnEnvWithMeta(startDir: string): { env: NodeJS.ProcessEn
   return { env, meta: { rgPath, pathPrefix } };
 }
 
-export function buildSpawnEnv(startDir: string): NodeJS.ProcessEnv {
-  return buildSpawnEnvWithMeta(startDir).env;
+export function buildSpawnEnv(_startDir: string): NodeJS.ProcessEnv {
+  return buildSpawnEnvWithMeta(_startDir).env;
 }

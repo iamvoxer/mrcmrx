@@ -126,8 +126,9 @@ export const api = {
   ): Promise<void> => {
     await postNdjsonStream('/api/forward/c-to-x', { ...body, stream: true }, handlers);
   },
-  getConfig: (projectPath: string) =>
-    request<{
+  getConfig: (projectPath?: string) => {
+    const qs = projectPath ? `?projectPath=${encodeURIComponent(projectPath)}` : '';
+    return request<{
       proxy: { url?: string } | null;
       cursorAgent: string | null;
       cursorAgentDetected: string | null;
@@ -138,48 +139,49 @@ export const api = {
       rgPath: string | null;
       rgDetected: string | null;
       rgResolved: { path: string; source: string } | null;
-      projectPath: string;
-    }>(`/api/config?projectPath=${encodeURIComponent(projectPath)}`),
+      settingsPath: string;
+    }>(`/api/config${qs}`);
+  },
   detectCursorAgent: () => request<{ path: string | null }>('/api/config/cursor-agent/detect'),
   detectCodex: () => request<{ path: string | null }>('/api/config/codex/detect'),
   detectRg: () => request<{ path: string | null }>('/api/config/rg/detect'),
-  setCursorAgent: (projectPath: string, path: string) =>
+  setCursorAgent: (path: string, projectPath?: string) =>
     request<{ cursorAgent: string | null; cursorAgentResolved: { node: string; index: string; source: string } }>(
       '/api/config/cursor-agent',
-      { method: 'PUT', body: JSON.stringify({ projectPath, path }) },
+      { method: 'PUT', body: JSON.stringify({ path, projectPath }) },
     ),
-  clearCursorAgent: (projectPath: string) =>
+  clearCursorAgent: () =>
     request<{ ok: boolean }>('/api/config/cursor-agent', {
       method: 'DELETE',
-      body: JSON.stringify({ projectPath }),
+      body: JSON.stringify({}),
     }),
-  setCodex: (projectPath: string, path: string) =>
+  setCodex: (path: string, projectPath?: string) =>
     request<{ codex: string | null; codexResolved: { bin: string; source: string } }>(
       '/api/config/codex',
-      { method: 'PUT', body: JSON.stringify({ projectPath, path }) },
+      { method: 'PUT', body: JSON.stringify({ path, projectPath }) },
     ),
-  clearCodex: (projectPath: string) =>
+  clearCodex: () =>
     request<{ ok: boolean }>('/api/config/codex', {
       method: 'DELETE',
-      body: JSON.stringify({ projectPath }),
+      body: JSON.stringify({}),
     }),
-  setRg: (projectPath: string, path: string) =>
+  setRg: (path: string, projectPath?: string) =>
     request<{ rgPath: string | null; rgResolved: { path: string; source: string } | null }>(
       '/api/config/rg',
-      { method: 'PUT', body: JSON.stringify({ projectPath, path }) },
+      { method: 'PUT', body: JSON.stringify({ path, projectPath }) },
     ),
-  clearRg: (projectPath: string) =>
+  clearRg: () =>
     request<{ ok: boolean }>('/api/config/rg', {
       method: 'DELETE',
-      body: JSON.stringify({ projectPath }),
+      body: JSON.stringify({}),
     }),
-  setProxy: (projectPath: string, url: string) =>
+  setProxy: (url: string) =>
     request<{ proxy: { url?: string } | null }>('/api/config/proxy', {
       method: 'PUT',
-      body: JSON.stringify({ projectPath, url }),
+      body: JSON.stringify({ url }),
     }),
-  clearProxy: (projectPath: string) =>
-    request<{ ok: boolean }>('/api/config/proxy', { method: 'DELETE', body: JSON.stringify({ projectPath }) }),
+  clearProxy: () =>
+    request<{ ok: boolean }>('/api/config/proxy', { method: 'DELETE', body: JSON.stringify({}) }),
   listArtifacts: (roomId: string) => request<{ artifacts: Array<{ path: string; name: string; size: number }> }>(`/api/rooms/${roomId}/artifacts`),
   readArtifact: (projectPath: string, relPath: string) =>
     request<{ path: string; content: string }>(
